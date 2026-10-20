@@ -28,8 +28,6 @@ def build_path_dataframe(df: pd.DataFrame, lateral_m: float = 15.0, depth_cm: fl
     if not np.any(np.isclose(depth_values, depth_cm)):
         raise ValueError(f"depth_cm={depth_cm} is unavailable; choose from {depth_values.tolist()}")
 
-    # Direct measured line when available; otherwise interpolate between the
-    # two surrounding lateral measurement lines for dashboard compatibility.
     exact = lateral_values[np.isclose(lateral_values, lateral_m)]
     if len(exact):
         path = df[(np.isclose(df["lateral_distance_m"], exact[0])) & (np.isclose(df["depth_cm"], depth_cm))].copy()
@@ -45,8 +43,7 @@ def build_path_dataframe(df: pd.DataFrame, lateral_m: float = 15.0, depth_cm: fl
         raise ValueError("Lateral source lines are not aligned")
     w = (lateral_m - lo) / (hi - lo)
     path = low.copy()
-    numeric_interp = ["provided_moisture_vwc_pct", "semi_synthetic_moisture_vwc_pct"]
-    for col in numeric_interp:
+    for col in ["provided_moisture_vwc_pct", "semi_synthetic_moisture_vwc_pct"]:
         path[col] = (1-w) * low[col].to_numpy(dtype=float) + w * high[col].to_numpy(dtype=float)
     path["lateral_distance_m"] = float(lateral_m)
     return path.reset_index(drop=True)
@@ -54,11 +51,12 @@ def build_path_dataframe(df: pd.DataFrame, lateral_m: float = 15.0, depth_cm: fl
 
 def predict_path(path_df: pd.DataFrame, model: HaoMixtureGPRRuntime) -> pd.DataFrame:
     X = path_df[FEATURE_COLUMNS].to_numpy(dtype=float)
-    mean, std, regime = model.predict_batch(X)
+    prediction, dominant_expert, expert_weights = model.predict_batch(X)
     result = path_df.copy()
-    result["predicted_moisture_pct"] = mean
-    result["prediction_std_pct"] = std
-    result["model_regime"] = regime
+    result["predicted_moisture_pct"] = prediction
+    result["dominant_expert"] = dominant_expert
+    result["expert_0_weight"] = expert_weights[:, 0]
+    result["expert_1_weight"] = expert_weights[:, 1]
     result["speed_m_s"] = result["tractor_speed_kmh"].astype(float) / 3.6
     return result
 
@@ -72,24 +70,29 @@ def build_control_log(predicted_path: pd.DataFrame, config: dict[str, float]) ->
             speed=float(row.speed_m_s),
             config=config,
             predicted_moisture=float(row.predicted_moisture_pct),
-            prediction_std=float(row.prediction_std_pct),
-            model_regime=int(row.model_regime),
         )
-        rows.append({"time_s": float(row.time_s), **decision})
+        rows.append({
+            "time_s": float(row.time_s),
+            **decision,
+            "dominant_expert": int(row.dominant_expert),
+            "expert_0_weight": float(row.expert_0_weight),
+            "expert_1_weight": float(row.expert_1_weight),
+        })
     return pd.DataFrame(rows)
 
 
 def build_release_events(predicted_path: pd.DataFrame, config: dict[str, float]) -> pd.DataFrame:
-    """Generate every crossed target-spacing location, not one event per sensor sample."""
     if predicted_path.empty:
         return pd.DataFrame()
+
     pos = predicted_path["longitudinal_distance_m"].to_numpy(dtype=float)
     time = predicted_path["time_s"].to_numpy(dtype=float)
     speed = predicted_path["speed_m_s"].to_numpy(dtype=float)
     measured = predicted_path["provided_moisture_vwc_pct"].to_numpy(dtype=float)
     predicted = predicted_path["predicted_moisture_pct"].to_numpy(dtype=float)
-    std = predicted_path["prediction_std_pct"].to_numpy(dtype=float)
-    regime = predicted_path["model_regime"].to_numpy(dtype=float)
+    dominant = predicted_path["dominant_expert"].to_numpy(dtype=float)
+    weight_0 = predicted_path["expert_0_weight"].to_numpy(dtype=float)
+    weight_1 = predicted_path["expert_1_weight"].to_numpy(dtype=float)
 
     spacing = float(config["target_spacing_m"])
     targets = np.arange(pos.min(), pos.max() + 1e-12, spacing)
@@ -97,23 +100,25 @@ def build_release_events(predicted_path: pd.DataFrame, config: dict[str, float])
     target_speed = np.interp(targets, pos, speed)
     target_measured = np.interp(targets, pos, measured)
     target_predicted = np.interp(targets, pos, predicted)
-    target_std = np.interp(targets, pos, std)
-    target_regime = np.rint(np.interp(targets, pos, regime)).astype(int)
+    target_dominant = np.rint(np.interp(targets, pos, dominant)).astype(int)
+    target_weight_0 = np.interp(targets, pos, weight_0)
+    target_weight_1 = np.interp(targets, pos, weight_1)
 
     events = []
-    for p, t, s, m, pred, uncertainty, r in zip(
+    for p, t, s, m, pred, de, w0, w1 in zip(
         targets, target_time, target_speed, target_measured,
-        target_predicted, target_std, target_regime
+        target_predicted, target_dominant, target_weight_0, target_weight_1
     ):
-        decision = evaluate_prediction(
-            p, m, s, config,
-            predicted_moisture=pred,
-            prediction_std=uncertainty,
-            model_regime=int(r),
-        )
+        decision = evaluate_prediction(p, m, s, config, predicted_moisture=pred)
         if not decision["should_release"]:
             continue
-        planned = {"time_s": float(t), **decision}
+        planned = {
+            "time_s": float(t),
+            **decision,
+            "dominant_expert": int(de),
+            "expert_0_weight": float(w0),
+            "expert_1_weight": float(w1),
+        }
         events.append(calculate_release_target(planned, config))
     return pd.DataFrame(events)
 
