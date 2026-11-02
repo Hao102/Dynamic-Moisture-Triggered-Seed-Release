@@ -16,9 +16,20 @@ REQUIRED_DATA_COLUMNS = set(FEATURE_COLUMNS + [
 
 def load_project_dataset(path: str | Path) -> pd.DataFrame:
     df = pd.read_csv(path)
+
     missing = sorted(REQUIRED_DATA_COLUMNS - set(df.columns))
     if missing:
         raise ValueError(f"Dataset missing required columns: {missing}")
+
+    if df.empty:
+        raise ValueError("Dataset cannot be empty")
+
+    if df[list(REQUIRED_DATA_COLUMNS)].isna().any().any():
+        raise ValueError("Dataset contains missing values")
+
+    if df.duplicated().any():
+        raise ValueError("Dataset contains duplicate rows")
+
     return df
 
 
