@@ -420,3 +420,100 @@ def test_stream_releases_only_within_moisture_range():
     assert [event["target_depth_mm"] for event in events] == pytest.approx(
         [32.361111111111114, 23.333333333333336]
     )
+
+def test_stream_emits_no_events_when_all_moisture_is_out_of_range():
+    config = {
+        "target_spacing_m": 0.5,
+        "min_moisture": 1.0,
+        "max_moisture": 10.0,
+        "min_depth_mm": 15.0,
+        "max_depth_mm": 40.0,
+        "sensor_offset_m": 0.0,
+        "actuator_delay_s": 0.0,
+    }
+
+    events = []
+    errors = []
+    completed = []
+
+    create_release_stream(
+        field_positions=[0.0, 3.0],
+        field_moisture=[20.0, 20.0],
+        speed_time=[0.0, 3.0],
+        speed_values=[1.0, 1.0],
+        config=config,
+    ).subscribe(
+        on_next=events.append,
+        on_error=errors.append,
+        on_completed=lambda: completed.append(True),
+    )
+
+    assert errors == []
+    assert completed == [True]
+    assert events == []
+
+def test_stream_does_not_release_while_reversing():
+    config = {
+        "target_spacing_m": 0.03,
+        "min_moisture": 1.0,
+        "max_moisture": 10.0,
+        "min_depth_mm": 15.0,
+        "max_depth_mm": 40.0,
+        "sensor_offset_m": 0.0,
+        "actuator_delay_s": 0.0,
+    }
+
+    events = []
+    errors = []
+    completed = []
+
+    create_release_stream(
+        field_positions=[0.3, 0.0],
+        field_moisture=[4.0, 4.0],
+        speed_time=[0.0, 0.3],
+        speed_values=[-1.0, -1.0],
+        config=config,
+    ).subscribe(
+        on_next=events.append,
+        on_error=errors.append,
+        on_completed=lambda: completed.append(True),
+    )
+
+    assert events == []
+    assert completed == []
+    assert len(errors) == 1
+    assert isinstance(errors[0], ValueError)
+
+def test_stream_preserves_prediction_metadata():
+    config = {
+        "target_spacing_m": 0.5,
+        "min_moisture": 1.0,
+        "max_moisture": 10.0,
+        "min_depth_mm": 15.0,
+        "max_depth_mm": 40.0,
+        "sensor_offset_m": 0.0,
+        "actuator_delay_s": 0.0,
+    }
+
+    events = []
+    errors = []
+    completed = []
+
+    create_release_stream(
+        field_positions=[0.0, 3.0],
+        field_moisture=[4.0, 4.0],
+        speed_time=[0.0, 3.0],
+        speed_values=[1.0, 1.0],
+        config=config,
+    ).subscribe(
+        on_next=events.append,
+        on_error=errors.append,
+        on_completed=lambda: completed.append(True),
+    )
+
+    assert errors == []
+    assert completed == [True]
+    assert len(events) == 7
+
+    assert all("prediction_std_pct" not in event for event in events)
+    assert all("model_regime" not in event for event in events)
