@@ -1,0 +1,7 @@
+{
+  "evaluation_subset": "2000 evenly spaced rows from provided dataset",
+  "mae": 6.778301070048099e-05,
+  "rmse": 0.00010540223781958426,
+  "r2": 0.9999999906197916,
+  "mean_prediction_std_pct": 0.0023842748696258393
+}
