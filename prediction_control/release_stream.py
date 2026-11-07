@@ -26,12 +26,24 @@ def _build_release_events(field_positions, field_moisture, speed_time, speed_val
     target_speed = np.interp(target_time, speed_time, speed_values)
     target_moisture = np.interp(targets, field_positions, field_moisture)
 
+    # Ani: Fixed calculations in this loop
+    sensor_offset_m = float(config.get("sensor_offset_m", 0.0))
+
     events = []
     for p, t, speed, moisture in zip(targets, target_time, target_speed, target_moisture):
         decision = evaluate_prediction(p, moisture, speed, config)
         if not decision["should_release"]:
             continue
-        events.append(calculate_release_target({"time_s": float(t), **decision}, config))
+
+        if speed > 0:
+            sensor_time = float(t - sensor_offset_m / speed)
+        else:
+            sensor_time = float(t)
+
+        events.append(calculate_release_target(
+            {"time_s": sensor_time, **decision}, config
+        ))
+
     return events
 
 
