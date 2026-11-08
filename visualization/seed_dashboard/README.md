@@ -1,21 +1,12 @@
-# Moisture-Triggered Seed Release Dashboard
+Final Dashboard
 
-## Setup (Python 3.10+)
-    python -m venv venv
-    venv\Scripts\activate          (Windows)   |   source venv/bin/activate   (Mac/Linux)
-    pip install -r requirements.txt
+Windows: double click run_windows.bat (the first time it sets up the packages)
 
-## Run
-    streamlit run app.py
-(Do not use `python app.py`, it gives ScriptRunContext warnings.) Opens at http://localhost:8501
+Or by hand:
+  python -m venv .venv
+  .venv\Scripts\activate
+  pip install -r requirements.txt
+  streamlit run final_dashboard.py
 
-## Using it
-1. Upload `soil_moisture_dataset_expanded.xlsx` in the sidebar (or a CSV with `distance_m, moisture_pct`, or leave empty for generated data).
-2. Set parameters, click **Run Simulation**.
-3. Animations (depth view, side view), metrics and charts appear. The release log downloads from the Raw Data tab.
-
-## Known limits
-- Control logic is a placeholder (moisture to depth mapping + actuator lag), Tony's RxPY module is not integrated yet.
-- Speed profile is synthetic unless a speed CSV (`time_s, speed_m_s`) is uploaded.
-- Lateral (field position) slider needs the XLSX file.
-- Animations show about 40 sample seeds for readability; metrics use all releases.
+The default dataset is in data/integration and the saved model is in models.
+You can upload a different dataset CSV in the sidebar (the model is trained again from it, about 10 seconds).
