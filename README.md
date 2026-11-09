@@ -111,7 +111,7 @@ Contains the actual simulated seed release events, including:
 Start the Streamlit dashboard with:
 
 ```bash
-streamlit run run_dashboard.py
+streamlit run final_dashboard.py
 ```
 
 Then open the local Streamlit URL shown in the terminal, normally:

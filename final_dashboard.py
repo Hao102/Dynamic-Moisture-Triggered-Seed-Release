@@ -87,21 +87,44 @@ def moisture_volume(key, step=8):
 
 # runs the seeder along the field using the control logic
 @st.cache_data(show_spinner=False)
-def run_pass(key, lateral_m, spacing_m, dt_s, tau_s, min_m, max_m, min_d, max_d):
+def run_pass(
+    key,
+    lateral_m,
+    spacing_m,
+    dt_s,
+    tau_s,
+    min_m,
+    max_m,
+    min_d,
+    max_d,
+    sensor_offset_m,
+):
     df, model = get_data(key)
+
     bridge._DATASET, bridge._MODEL = df, model
-    # the bridge tries to guess the lateral line but we already know it
     bridge._estimate_lateral = lambda *a, **k: float(lateral_m)
+
     path = build_path_dataframe(df, lateral_m, 5.0)
     speed = path["tractor_speed_kmh"].to_numpy(float) / 3.6
+
     log, rel = run_simulation(
         path["longitudinal_distance_m"].to_numpy(float),
         path["provided_moisture_vwc_pct"].to_numpy(float),
-        path["time_s"].to_numpy(float), speed,
-        spacing_m, dt_s, tau_s, min_m, max_m, min_d, max_d,
+        path["time_s"].to_numpy(float),
+        speed,
+        spacing_m,
+        dt_s,
+        tau_s,
+        min_m,
+        max_m,
+        min_d,
+        max_d,
+        sensor_offset_m,
     )
+
     log["error_mm"] = log["actuator_depth_mm"] - log["target_depth_mm"]
     rel["error_mm"] = rel["actuator_depth_mm"] - rel["target_depth_mm"]
+
     return log, rel
 
 
@@ -696,17 +719,35 @@ with st.sidebar.form("controls"):
     moist_range = st.slider("Moisture range mapped to depth (%)", 0.0, 15.0,
                             (float(DEFAULT_CONFIG["min_moisture"]), float(DEFAULT_CONFIG["max_moisture"])), step=0.5)
     tau_ms = st.slider("Actuator speed (time constant, ms)", 10, 500, 150, step=10)
-    dt_ms = st.slider("Control loop step (ms)", 5, 100, 10, step=5)
+    dt_ms = st.slider("Control loop step (ms)", 5, 100, 100, step=5)
     target_m = st.slider("Target moisture (%)", 1.0, 9.0, 3.5, step=0.1)
     margin_m = st.slider("Horizontal margin (m)", 0.25, 5.0, 1.0, step=0.25)
-    st.form_submit_button("Run Simulation", type="primary")
+    # Added this from the control logic
+    sensor_offset_m = st.slider("Sensor offset (m)", 0.0, 2.0, float(DEFAULT_CONFIG["sensor_offset_m"]), 0.05)
+    submitted = st.form_submit_button(
+      "Run Simulation",
+      type="primary",
+    )
 
 # settings in the units the simulation wants (seconds and metres)
 params = (lateral_m, spacing_mm / 1000, dt_ms / 1000, tau_ms / 1000,
-          moist_range[0], moist_range[1], depth_range[0], depth_range[1])
+          moist_range[0], moist_range[1], depth_range[0], depth_range[1], sensor_offset_m)
 
 # ---- main page ----
 st.title("Dynamic Moisture-Triggered Seed Release")
+
+if "simulation_started" not in st.session_state:
+    st.session_state["simulation_started"] = False
+
+if submitted:
+    st.session_state["simulation_started"] = True
+
+if not st.session_state["simulation_started"]:
+    st.info(
+        "Configure the settings in the sidebar, then click "
+        "'Run Simulation' to start."
+    )
+    st.stop()
 
 # run the simulation
 with st.spinner("Running the seeder..."):
