@@ -171,7 +171,6 @@ def run_simulation(
             moisture,
             speed,
             config,
-            predicted_moisture=predicted_moisture,
         )
         for position, moisture, speed, predicted_moisture in zip(
             sensor_positions,
@@ -224,7 +223,7 @@ def run_simulation(
         "position_m": positions,
         "sensor_position_m": sensor_positions,
         "speed_m_s": speeds,
-        "moisture_pct": pred,
+        "moisture_pct": control_moisture,
         "target_depth_mm": target,
         "actuator_depth_mm": actual,
         "measured_moisture_pct": sensor_moisture,
@@ -308,7 +307,6 @@ def run_simulation(
             release_moisture[i],
             release_speeds[i],
             config,
-            predicted_moisture=release_predictions[i],
         )
 
         if decision["should_release"]:
@@ -319,7 +317,7 @@ def run_simulation(
                     sensor_positions_for_release[i]
                 ),
                 "speed_m_s": float(release_speeds[i]),
-                "moisture_pct": float(release_predictions[i]),
+                "moisture_pct": float(decision["moisture_pct"]),
                 "target_depth_mm": decision["target_depth_mm"],
                 "actuator_depth_mm": float(release_actual_depth[i]),
                 "measured_moisture_pct": float(release_moisture[i]),

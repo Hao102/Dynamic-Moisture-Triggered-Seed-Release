@@ -718,7 +718,7 @@ with st.sidebar.form("controls"):
                             (float(DEFAULT_CONFIG["min_moisture"]), float(DEFAULT_CONFIG["max_moisture"])), step=0.5)
     tau_ms = st.slider("Assumed actuator speed (response time constant, ms)", 10, 500, 150, step=10,
       help="Simulation assumption, not a measured hydraulic specification. ")
-    command_rate_hz = st.number_input("Depth-command update rate (Hz)", 1.0, 100.0, 10.0, step=1.0,
+    command_rate_hz = st.slider("Depth-command update rate (Hz)", 1.0, 100.0, 10.0, step=1.0,
       help=(
           "How often the controller updates the requested depth. "
           "This is not the seed-release rate or the actuator travel speed."
@@ -765,8 +765,8 @@ if rel.empty:
 
     st.info(
         "No seed releases were generated for this run. "
-        "The release decisions use predicted moisture; "
-        "check the selected moisture range against the predictions below."
+        "The release decisions use measured soil moisture; "
+        "model predictions are shown for comparison"
     )
 
     st.subheader("Moisture during the run")
