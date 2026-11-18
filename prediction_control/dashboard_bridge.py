@@ -9,6 +9,7 @@ from interface import DEFAULT_CONFIG
 from .dataset_pipeline import load_project_dataset
 from .hao_model_runtime import HaoMixtureGPRRuntime
 from .prediction_logic import evaluate_prediction
+from .validation import validate_inputs
 
 ROOT = Path(__file__).resolve().parents[1]
 DATASET_PATH = ROOT / "data" / "integration" / "final_semi_synthetic_winter_wheat_v2.csv"
@@ -62,6 +63,39 @@ def run_simulation(
     model=None,
     lateral_m=None,
 ):
+    # Build the control configuration from the dashboard inputs.
+    config = dict(DEFAULT_CONFIG)
+    config.update({
+        "target_spacing_m": float(target_spacing_m),
+        "min_moisture": float(min_moisture),
+        "max_moisture": float(max_moisture),
+        "min_depth_mm": float(min_depth),
+        "max_depth_mm": float(max_depth),
+        "actuator_tau_s": float(actuator_tau_s),
+        "sensor_offset_m": float(sensor_offset_m),
+    })
+
+    # Convert NumPy containers to ordinary lists without coercing values.
+    validation_inputs = [
+        values.tolist() if isinstance(values, np.ndarray) else values
+        for values in (
+            field_positions,
+            field_moisture,
+            speed_time,
+            speed_values,
+        )
+    ]
+
+    validate_inputs(*validation_inputs, config)
+
+    if not np.isfinite(control_dt_s) or control_dt_s <= 0:
+        raise ValueError("control_dt_s must be finite and greater than 0")
+
+    if len(speed_time) < 2:
+        raise ValueError("At least two speed timestamps are required")
+
+    if speed_time[-1] <= 0:
+        raise ValueError("The final speed timestamp must be greater than 0")
 
     # Run the moisture-triggered seed-release control simulation.
 
@@ -72,14 +106,6 @@ def run_simulation(
     field_moisture = np.asarray(field_moisture, float)
     speed_time = np.asarray(speed_time, float)
     speed_values = np.asarray(speed_values, float)
-
-    if len(field_positions) == 0:
-        raise ValueError("The field position array is empty.")
-
-    if len(field_moisture) != len(field_positions):
-        raise ValueError(
-            "field_positions and field_moisture must have the same length."
-        )
 
     lateral = (
         float(lateral_m)
@@ -137,18 +163,6 @@ def run_simulation(
     # Predict moisture at the requested model depth.
     pred, dominant, weights = model.predict_batch(X)
 
-    # Build the control configuration from the dashboard inputs.
-    config = dict(DEFAULT_CONFIG)
-    config.update({
-        "target_spacing_m": float(target_spacing_m),
-        "min_moisture": float(min_moisture),
-        "max_moisture": float(max_moisture),
-        "min_depth_mm": float(min_depth),
-        "max_depth_mm": float(max_depth),
-        "actuator_tau_s": float(actuator_tau_s),
-        "sensor_offset_m": float(sensor_offset_m),
-    })
-
     # Determine the requested target depth at each control update.
     # Retain the complete decision at each control update.
     decisions = [
@@ -183,19 +197,25 @@ def run_simulation(
         dtype=float,
     )
 
-    # Model the actuator response as a first-order lag.
+    # Simulated actuator response with commands held between updates.
+    # Assume the actuator starts at the first requested depth.
     actual = np.empty_like(target)
+    tau = float(actuator_tau_s)
 
     if len(target):
         actual[0] = target[0]
 
-        alpha = float(control_dt_s) / (
-            float(actuator_tau_s) + float(control_dt_s)
-        )
+    for i in range(1, len(target)):
+        elapsed_s = float(times[i] - times[i - 1])
+        previous_command = target[i - 1]
 
-        for i in range(1, len(target)):
-            actual[i] = actual[i - 1] + alpha * (
-                target[i] - actual[i - 1]
+        if tau == 0.0:
+            actual[i] = previous_command
+        else:
+            decay = np.exp(-elapsed_s / tau)
+            actual[i] = (
+                previous_command
+                + (actual[i - 1] - previous_command) * decay
             )
 
     # Continuous control log for the animation, charts, and diagnostics.
@@ -229,13 +249,9 @@ def run_simulation(
         float(target_spacing_m),
     )
 
-    # For each target seed position, evaluate moisture at the sensor location
-    # that is sensor_offset_m ahead of the release point.
-    sensor_positions_for_release = np.clip(
-        targets + float(sensor_offset_m),
-        field_positions.min(),
-        field_positions.max(),
-    )
+    # Evaluate each candidate using moisture at its target ground position.
+    # Sensor offset will determine observation lead time, not shift this lookup.
+    sensor_positions_for_release = targets.copy()
 
     release_moisture = np.interp(
         sensor_positions_for_release,
@@ -260,6 +276,23 @@ def run_simulation(
         positions,
         times,
     )
+
+    # Find the command active at each release time.
+    command_indices = np.searchsorted(times, release_times, side="right") - 1
+    command_indices = np.clip(command_indices, 0, len(times) - 1)
+    elapsed_since_command = (release_times - times[command_indices])
+
+    if tau == 0.0:
+        release_actual_depth = target[command_indices].copy()
+    else:
+        release_actual_depth = (
+            target[command_indices]
+            + (
+                actual[command_indices]
+                - target[command_indices]
+            )
+            * np.exp(-elapsed_since_command / tau)
+        )
 
     release_speeds = np.interp(
         targets,
@@ -288,13 +321,7 @@ def run_simulation(
                 "speed_m_s": float(release_speeds[i]),
                 "moisture_pct": float(release_predictions[i]),
                 "target_depth_mm": decision["target_depth_mm"],
-                "actuator_depth_mm": float(
-                    np.interp(
-                        release_times[i],
-                        times,
-                        actual,
-                    )
-                ),
+                "actuator_depth_mm": float(release_actual_depth[i]),
                 "measured_moisture_pct": float(release_moisture[i]),
                 "predicted_moisture_pct": float(release_predictions[i]),
                 "dominant_expert": int(release_dominant[i]),

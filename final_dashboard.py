@@ -131,7 +131,8 @@ def seeding_errors(rel, pos, prof, target, min_d_mm, max_d_mm, margin_m, max_see
     # take every nth seed so it doesnt take too long
     r = rel.iloc[::max(1, len(rel) // max_seeds)].copy()
     cols = np.clip(np.searchsorted(pos, r["position_m"].to_numpy()), 0, len(pos) - 1)
-    seed_depth = np.clip(r["target_depth_mm"].to_numpy() / 10.0, DEPTHS_CM[0], DEPTHS_CM[-1])
+    # Use simulated achieved depth for the moisture lookup.
+    seed_depth = np.clip(r["actuator_depth_mm"].to_numpy(dtype=float) / 10.0, DEPTHS_CM[0], DEPTHS_CM[-1])
     f = interp1d(DEPTHS_CM, prof[:, cols], axis=0)
     # moisture where each seed actually goes
     m_seed = np.array([float(np.interp(seed_depth[k], DEPTHS_CM, prof[:, cols[k]])) for k in range(len(cols))])
@@ -154,7 +155,7 @@ def seeding_errors(rel, pos, prof, target, min_d_mm, max_d_mm, margin_m, max_see
         m_after[k] = window[j]
     r["moisture_gap"] = m_seed - target
     r["best_depth_mm"] = best_depth_mm
-    r["depth_error_mm"] = r["target_depth_mm"].to_numpy() - best_depth_mm
+    r["depth_error_mm"] = r["actuator_depth_mm"].to_numpy(dtype=float) - best_depth_mm
     r["horizontal_shift_m"] = shift
     r["moisture_gap_after_shift"] = m_after - target
     return r
@@ -715,8 +716,15 @@ with st.sidebar.form("controls"):
     depth_range = st.slider("Seeding depth range (mm)", 0, depth_max + 10, (depth_min, depth_max))
     moist_range = st.slider("Moisture range mapped to depth (%)", 0.0, 15.0,
                             (float(DEFAULT_CONFIG["min_moisture"]), float(DEFAULT_CONFIG["max_moisture"])), step=0.5)
-    tau_ms = st.slider("Actuator speed (time constant, ms)", 10, 500, 150, step=10)
-    dt_ms = st.slider("Control loop step (ms)", 5, 100, 100, step=5)
+    tau_ms = st.slider("Assumed actuator speed (response time constant, ms)", 10, 500, 150, step=10,
+      help="Simulation assumption, not a measured hydraulic specification. ")
+    command_rate_hz = st.number_input("Depth-command update rate (Hz)", 1.0, 100.0, 10.0, step=1.0,
+      help=(
+          "How often the controller updates the requested depth. "
+          "This is not the seed-release rate or the actuator travel speed."
+      ),
+    )
+    control_dt_s = 1.0 / float(command_rate_hz)
     target_m = st.slider("Target moisture (%)", 1.0, 9.0, 3.5, step=0.1)
     margin_m = st.slider("Horizontal margin (m)", 0.25, 5.0, 1.0, step=0.25)
     # Added this from the control logic
@@ -727,7 +735,7 @@ with st.sidebar.form("controls"):
     )
 
 # settings in the units the simulation wants (seconds and metres)
-params = (lateral_m, spacing_mm / 1000, dt_ms / 1000, tau_ms / 1000,
+params = (lateral_m, spacing_mm / 1000, control_dt_s, tau_ms / 1000,
           moist_range[0], moist_range[1], depth_range[0], depth_range[1], sensor_offset_m)
 
 # ---- main page ----
@@ -823,9 +831,12 @@ with tab_err:
         col.markdown("**" + title + "**")
         col.bar_chart(pd.DataFrame({"seeds": counts}, index=np.round((edges[:-1] + edges[1:]) / 2, 2)), height=220)
     # chosen depth against the best depth along the field
-    st.markdown("**Chosen depth vs best depth along the field (mm)**")
-    line = errs.set_index("position_m")[["target_depth_mm", "best_depth_mm"]]
-    line = line.rename(columns={"target_depth_mm": "chosen", "best_depth_mm": "best"})
+    st.markdown("Simulated seed depth vs model-derived best depth (mm)")
+    line = errs.set_index("position_m")[["actuator_depth_mm", "best_depth_mm"]]
+    line = line.rename(columns={
+      "actuator_depth_mm": "simulated seed depth",
+      "best_depth_mm": "model-derived best depth",
+    })
     st.line_chart(line, height=260)
 
 # tab 4: table of every release
