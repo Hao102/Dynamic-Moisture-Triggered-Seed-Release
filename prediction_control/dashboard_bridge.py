@@ -58,10 +58,15 @@ def run_simulation(
     min_depth,
     max_depth,
     sensor_offset_m=0.50,
+    *,
+    model=None,
+    lateral_m=None,
 ):
+
     # Run the moisture-triggered seed-release control simulation.
 
-    _, model = _resources()
+    if model is None:
+        _, model = _resources()
 
     field_positions = np.asarray(field_positions, float)
     field_moisture = np.asarray(field_moisture, float)
@@ -76,7 +81,11 @@ def run_simulation(
             "field_positions and field_moisture must have the same length."
         )
 
-    lateral = _estimate_lateral(field_positions, field_moisture)
+    lateral = (
+        float(lateral_m)
+        if lateral_m is not None
+        else _estimate_lateral(field_positions, field_moisture)
+    )
     depth_cm = 5.0
 
     # Create control-loop timestamps at the selected control frequency.
@@ -141,21 +150,38 @@ def run_simulation(
     })
 
     # Determine the requested target depth at each control update.
-    target = np.array([
+    # Retain the complete decision at each control update.
+    decisions = [
         evaluate_prediction(
             position,
             moisture,
             speed,
             config,
             predicted_moisture=predicted_moisture,
-        )["target_depth_mm"]
+        )
         for position, moisture, speed, predicted_moisture in zip(
             sensor_positions,
             sensor_moisture,
             speeds,
             pred,
         )
-    ], float)
+    ]
+
+    target = np.array(
+        [decision["target_depth_mm"] for decision in decisions],
+        dtype=float,
+    )
+
+    # retaining two additional outputs
+    release_eligible = np.array(
+        [decision["should_release"] for decision in decisions],
+        dtype=bool,
+    )
+
+    control_moisture = np.array(
+        [decision["moisture_pct"] for decision in decisions],
+        dtype=float,
+    )
 
     # Model the actuator response as a first-order lag.
     actual = np.empty_like(target)
@@ -183,6 +209,14 @@ def run_simulation(
         "actuator_depth_mm": actual,
         "measured_moisture_pct": sensor_moisture,
         "predicted_moisture_pct": pred,
+        "control_moisture_pct": control_moisture,
+        "release_eligible": release_eligible,
+        "decision_reason": [
+            "within_moisture_range"
+            if eligible
+            else "outside_moisture_range"
+            for eligible in release_eligible
+        ],
         "dominant_expert": dominant,
         "expert_0_weight": weights[:, 0],
         "expert_1_weight": weights[:, 1],
@@ -268,4 +302,21 @@ def run_simulation(
                 "expert_1_weight": float(release_weights[i, 1]),
             })
 
-    return log, pd.DataFrame(release_rows)
+# Patch: handle runs with zero releases (edge case)
+    release_columns = [
+        "time_s",
+        "position_m",
+        "sensor_position_m",
+        "speed_m_s",
+        "moisture_pct",
+        "target_depth_mm",
+        "actuator_depth_mm",
+        "measured_moisture_pct",
+        "predicted_moisture_pct",
+        "dominant_expert",
+        "expert_0_weight",
+        "expert_1_weight",
+    ]
+    releases = pd.DataFrame(release_rows, columns=release_columns)
+
+    return log, releases

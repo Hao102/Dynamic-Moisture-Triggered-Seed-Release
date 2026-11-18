@@ -17,7 +17,6 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
 from interface import DEFAULT_CONFIG
-import prediction_control.dashboard_bridge as bridge
 from prediction_control.dashboard_bridge import run_simulation
 from prediction_control.dataset_pipeline import REQUIRED_DATA_COLUMNS, build_path_dataframe
 from prediction_control.hao_model_runtime import HaoMixtureGPRRuntime
@@ -101,9 +100,6 @@ def run_pass(
 ):
     df, model = get_data(key)
 
-    bridge._DATASET, bridge._MODEL = df, model
-    bridge._estimate_lateral = lambda *a, **k: float(lateral_m)
-
     path = build_path_dataframe(df, lateral_m, 5.0)
     speed = path["tractor_speed_kmh"].to_numpy(float) / 3.6
 
@@ -120,6 +116,8 @@ def run_pass(
         min_d,
         max_d,
         sensor_offset_m,
+        model=model,
+        lateral_m=lateral_m
     )
 
     log["error_mm"] = log["actuator_depth_mm"] - log["target_depth_mm"]
@@ -698,7 +696,6 @@ if key not in store():
     store()[key] = (df_new, model_new)
 
 df, model = get_data(key)
-bridge._DATASET, bridge._MODEL = df, model
 st.sidebar.caption("Using: " + (data_file.name if data_file is not None else "default dataset"))
 
 # lateral lines and depths come from the data
@@ -753,6 +750,36 @@ if not st.session_state["simulation_started"]:
 with st.spinner("Running the seeder..."):
     pos, sec = moisture_section(key, lateral_m)
     log, rel = run_pass(key, *params)
+
+# No releases generated case
+if rel.empty:
+    st.metric("Seeds released", 0)
+
+    st.info(
+        "No seed releases were generated for this run. "
+        "The release decisions use predicted moisture; "
+        "check the selected moisture range against the predictions below."
+    )
+
+    st.subheader("Moisture during the run")
+    st.line_chart(
+        log.set_index("time_s")[
+            ["measured_moisture_pct", "predicted_moisture_pct"]
+        ],
+        height=260,
+    )
+
+    with st.expander("View continuous control log"):
+        st.dataframe(log, height=300)
+
+    st.download_button(
+        "Download control log CSV",
+        data=log.to_csv(index=False),
+        file_name="control_log.csv",
+        mime="text/csv",
+    )
+
+    st.stop()
 
 # numbers at the top
 err = log["error_mm"].to_numpy()
