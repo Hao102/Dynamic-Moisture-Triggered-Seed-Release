@@ -765,8 +765,8 @@ if rel.empty:
 
     st.info(
         "No seed releases were generated for this run. "
-        "The release decisions use measured soil moisture; "
-        "model predictions are shown for comparison"
+        "Release eligibility uses valid, filtered/model-assisted controller observations "
+        "available before the calculated release-command time."
     )
 
     st.subheader("Moisture during the run")
@@ -797,9 +797,17 @@ c[0].metric("Seeds released", f"{len(rel):,}")
 c[1].metric("Mean spacing", f"{spacing.mean():.2f} mm", f"target {spacing_mm} mm")
 c[2].metric("Mean actuator gap", f"{np.abs(err).mean():.2f} mm")
 c[3].metric("Largest gap", f"{np.abs(err).max():.2f} mm")
-c[4].metric("Within 1 mm", f"{(np.abs(err) <= 1).mean() * 100:.0f}%")
+c[4].metric("Depth error ≤ 1 mm", f"{(np.abs(err) <= 1).mean() * 100:.0f}%")
 
-tab_anim, tab_3d, tab_err, tab_data = st.tabs(["Animation", "3D moisture model", "Seeding errors", "Release log"])
+tab_anim, tab_3d, tab_err, tab_data, tab_control = st.tabs(
+    [
+        "Animation",
+        "3D moisture model",
+        "Seeding errors",
+        "Release log",
+        "Controller diagnostics",
+    ]
+)
 
 # tab 1: animation
 with tab_anim:
@@ -847,3 +855,80 @@ with tab_data:
     buf = io.StringIO()
     rel.to_csv(buf, index=False)
     st.download_button("Download release log (CSV)", buf.getvalue(), file_name="release_log.csv", mime="text/csv")
+
+with tab_control:
+    st.caption(
+        "Sequential moisture filtering and model-assisted depth control. "
+        "Drier soil requests deeper planting; wetter soil requests shallower "
+        "planting. Results below are from dataset replay."
+    )
+
+    moisture_columns = [
+        "measured_moisture_pct",
+        "filtered_moisture_pct",
+        "predicted_moisture_pct",
+        "control_moisture_pct",
+    ]
+    available_columns = [
+        column for column in moisture_columns if column in log.columns
+    ]
+
+    st.line_chart(
+        log.set_index("time_s")[available_columns],
+        height=240,
+    )
+
+    valid_commands = log.loc[log["command_valid"]]
+    diagnostics = st.columns(3)
+
+    diagnostics[0].metric(
+        "Valid depth-command samples",
+        f"{len(valid_commands):,} / {len(log):,}",
+    )
+
+    assisted_count = (
+        valid_commands["control_source"].eq("model_assisted").sum()
+    )
+    diagnostics[1].metric(
+        "Model-assisted valid samples",
+        (
+            f"{100.0 * assisted_count / len(valid_commands):.1f}%"
+            if len(valid_commands)
+            else "N/A"
+        ),
+    )
+
+    diagnostics[2].metric("Seed-gap tolerance target", "±1.0 mm")
+
+    if len(rel) >= 2:
+        replay_gaps = rel["position_m"].diff().dropna()
+        gap_error = replay_gaps - float(params[1])
+        within = gap_error.abs() <= 0.001 + 1e-12
+
+        st.json(
+            {
+                "Replay gap count": int(len(replay_gaps)),
+                "Mean replay gap (mm)": float(replay_gaps.mean() * 1000),
+                "Replay gap MAE (mm)": float(gap_error.abs().mean() * 1000),
+                "Maximum absolute replay gap error (mm)": float(
+                    gap_error.abs().max() * 1000
+                ),
+                "Replay gaps within tolerance (%)": float(
+                    within.mean() * 100
+                ),
+            }
+        )
+
+    st.warning(
+        "Spacing figures describe replay release positions, not measured "
+        "physical seed placement. Physical ±1 mm accuracy and feedback-based "
+        "row correction are not validated in this version."
+    )
+
+    st.download_button(
+        "Download controller diagnostics CSV",
+        data=log.to_csv(index=False),
+        file_name="controller_diagnostics.csv",
+        mime="text/csv",
+        key="controller_diagnostics_download",
+    )
