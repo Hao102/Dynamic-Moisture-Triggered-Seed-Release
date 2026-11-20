@@ -358,13 +358,37 @@ def run_simulation(
 
     release_rows = []
 
+    # Replay assumes the recorded motion profile is known.
+    # Controller observations must still be available before command time.
+    delay_s = float(config.get("actuator_delay_s", 0.0))
+    release_command_times = release_times - delay_s
+
+    available_indices = (
+        np.searchsorted(times, release_command_times, side="right") - 1
+    )
+
     for i, target_position in enumerate(targets):
-        decision = evaluate_prediction(
-            target_position,
-            release_moisture[i],
-            release_speeds[i],
-            config,
-        )
+        observation_index = int(available_indices[i])
+
+        # Do not use future observations or issue startup commands.
+        if observation_index < 0:
+            continue
+        if not command_valid[observation_index]:
+            continue
+        if release_speeds[i] <= 0.0:
+            continue
+
+        moisture = float(control_moisture[observation_index])
+
+        decision = {
+            "should_release": bool(
+                config["min_moisture"]
+                <= moisture
+                <= config["max_moisture"]
+            ),
+            "moisture_pct": moisture,
+            "target_depth_mm": float(target[observation_index]),
+        }
 
         if decision["should_release"]:
             release_rows.append({
@@ -377,11 +401,20 @@ def run_simulation(
                 "moisture_pct": float(decision["moisture_pct"]),
                 "target_depth_mm": decision["target_depth_mm"],
                 "actuator_depth_mm": float(release_actual_depth[i]),
-                "measured_moisture_pct": float(release_moisture[i]),
-                "predicted_moisture_pct": float(release_predictions[i]),
-                "dominant_expert": int(release_dominant[i]),
-                "expert_0_weight": float(release_weights[i, 0]),
-                "expert_1_weight": float(release_weights[i, 1]),
+                "measured_moisture_pct": float(
+                    sensor_moisture[observation_index]
+                ),
+                "predicted_moisture_pct": float(pred[observation_index]),
+                "dominant_expert": int(dominant[observation_index]),
+                "expert_0_weight": float(weights[observation_index, 0]),
+                "expert_1_weight": float(weights[observation_index, 1]),
+                "filtered_moisture_pct": float(
+                    filtered_moisture[observation_index]
+                ),
+                "control_moisture_pct": moisture,
+                "observation_time_s": float(times[observation_index]),
+                "command_time_s": float(release_command_times[i]),
+                "control_source": decisions[observation_index]["control_source"],
             })
 
 # Patch: handle runs with zero releases (edge case)
@@ -398,6 +431,11 @@ def run_simulation(
         "dominant_expert",
         "expert_0_weight",
         "expert_1_weight",
+        "filtered_moisture_pct",
+        "control_moisture_pct",
+        "observation_time_s",
+        "command_time_s",
+        "control_source",
     ]
     releases = pd.DataFrame(release_rows, columns=release_columns)
 
