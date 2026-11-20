@@ -29,6 +29,12 @@ The dataset provider supplies data for simulation; the operator configures and r
 
 D1 represents available input datasets, including the default dataset. It contains the soil-moisture observations and associated fields required to prepare a simulated pass. Process 1.0 reads this store.
 
+#### Client Raw Spatial-Grid Data
+
+Original client-supplied spatial moisture-grid data is stored under `data/raw/`.
+
+The current dashboard uploader does not directly accept the client raw format. A future importer must normalise the spatial grid, validate missing metadata and unexpected cells, and convert the data into the dashboard’s internal replay format.
+
 ### D2. Saved Model Artefact
 
 D2 represents a saved trained model used by Process 5.0. Where an appropriate artefact is unavailable, the loaded dataset can support fallback model fitting. The diagram does not claim that fallback fitting automatically writes a new artefact to D2.
@@ -61,42 +67,89 @@ These flows support simulation. They do not establish that observation history, 
 
 ### 3.0 Generate Moisture-Based Control Decisions
 
-This process receives measured observations and operating information from Process 2.0 and predicted moisture from Process 5.0.
+### 3.0 Filter Moisture and Generate Depth Commands
 
-In the prediction-enabled path, the supplied prediction is the moisture value used for the decision. The measured value remains available for traceability. In the measured-only alternative, the prediction override is omitted and the controller uses measured moisture instead. The diagram depicts the former path, not a claim that both values are automatically blended or filtered.
+This process receives replayed sensor observations and operating information from Process 2.0, together with predicted moisture from Process 5.0 when a model is available.
 
-The agreed depth rule is:
+For each new observation, the controller:
+1. Validates the raw moisture observation.
+2. Updates a bounded history of valid readings.
+3. Calculates a rolling median once the filter is ready.
+4. Obtains a model prediction using the filtered moisture and configured spatial context, when a model is supplied.
+5. Combines filtered sensor moisture with the model prediction.
+6. Maps the resulting control moisture to a target planting depth.
 
+The current implementation uses a three-observation median window and a model
+weight of 0.2:
+
+```text
+control moisture =
+    0.8 × filtered sensor moisture
+  + 0.2 × predicted moisture
+```
+
+These are implementation defaults, not calibrated optimal values.
+
+The depth rule is:
 - Higher control moisture requests shallower planting.
 - Lower control moisture requests deeper planting.
 - Requested depth remains within the configured limits.
 
-The controller separately checks whether control moisture lies within the permitted release range. It can therefore return a bounded depth request even when a seed release is not eligible.
+The controller returns a valid target-depth command only after the median filter is ready. Invalid observations and filter warm-up observations do not produce a new valid depth command. Replay retains the previous target depth in those cases.
 
-Depth-command update frequency is configurable, with 10 Hz as the current default. It describes the interval between commands, not hydraulic travel capability, fixed actuator latency, or seed-release capacity.
+If no model is supplied, the controller operates in sensor-only mode. If a model prediction is missing or invalid, the controller falls back to valid filtered sensor moisture.
 
-Requested depths, eligibility results, and decision records pass to Process 4.0. A continuous decision log passes to D3.
+Prediction uncertainty is not currently accepted by the controller and does not affect the control weight.
 
-### 4.0 Simulate Depth Response and Assemble Release Records
+This process does not itself authorise or schedule seed release. It supplies controller observations and target-depth commands to Process 4.0. A continuous decision log passes to D3.
 
-This process combines controller outputs with trajectory, timing, and simulation settings. It simulates actuator movement toward successive depth commands using an assumed response model, retaining requested depth separately from simulated achieved depth.
+### 4.0 Generate Release Events and Simulate Depth Response
 
-Release records are assembled from candidate planting locations and eligibility decisions. Records associate simulated events with timing, position, moisture, requested depth, and achieved depth, as available in the selected implementation.
+This process receives controller observations and target-depth commands from Process 3.0, together with trajectory, timing, and simulation settings from Process 2.0.
 
-The results pass to D3. This process is not evidence that the dashboard executes a fully verified shared release-stream or compensation implementation. Full look-ahead scheduling and hardware calibration remain separate integration and verification tasks.
+It performs two related replay responsibilities:
+1. Generates candidate seed positions and determines release eligibility.
+2. Simulates actuator movement toward successive target-depth commands.
+
+Release candidates are generated on a spatial grid using the configured seed spacing. A candidate is eligible when its control moisture lies within the configured minimum and maximum moisture range.
+
+For release eligibility, the replay selects a controller observation available
+at or before the calculated command time:
+
+```text
+command time = planned release time - configured release delay
+```
+
+Candidates without a valid available controller observation are skipped.
+The replay then applies sensor-offset and actuator-delay compensation:
+
+```text
+release time = command time + actuator delay
+```
+
+When available sensor lead time is sufficient, the command is scheduled so that expected physical release occurs at the target position. When lead time is insufficient, the command is issued immediately and the unavoidable late-release distance is recorded as `compensation_error_m`.
+
+The simulated actuator starts at the configured minimum depth and moves toward successive target-depth commands using the configured response time constant. Requested depth remains separate from simulated achieved depth.
+
+Release records associate simulated events with timing, position, moisture, requested depth, and achieved depth, as available in the selected implementation. Results pass to D3.
+
+This process does not demonstrate a live scheduler that predicts unknown future vehicle motion, manages all pending actuator commands, or corrects future releases from measured seed-placement feedback.
+
 
 ### 5.0 Generate Moisture Predictions
 
 This process receives spatial and measured-moisture features from Process 2.0. It uses a saved model from D2 or a model fitted from the loaded dataset supplied by Process 1.0.
 
 Its outputs have two distinct destinations:
-
-1. **Process 3.0:** predicted moisture used for control in the prediction-enabled path.
+1. **Process 3.0:** predicted moisture available for model-assisted depth control.
 2. **D3:** predicted moisture and moisture profiles for visualisation and review.
 
 The control flow should not be interpreted as sending entire visualisation profiles into the decision function. Only the prediction values required by that function are supplied for control. Any additional model metadata retained in run outputs is diagnostic unless explicitly consumed by the controller.
 
-Prediction is not automatically equivalent to sensor-noise filtering. Claims of denoising, confidence, uncertainty, or improved accuracy require evidence from the model's training objective and evaluation. Predicted moisture is not ground-truth soil moisture.
+Prediction is not equivalent to sensor-noise filtering. The controller performs separate bounded median filtering of sensor observations before using model assistance. 
+Claims of denoising, confidence, uncertainty, or improved accuracy require evidence from the model’s training objective and evaluation.
+
+The current controller combines filtered sensor moisture with predicted moisture using a fixed model weight. It does not currently use prediction uncertainty to adjust that weight.
 
 ### 6.0 Present Results and Export Logs
 
@@ -118,8 +171,8 @@ Validation messages from Process 1.0 are also presented here. Valid runs with ze
 | 2.0 | 4.0 | Trajectory, timing, and simulation settings |
 | 2.0 | 5.0 | Position, lateral location, depth, and measured-moisture features |
 | D2 | 5.0 | Saved model |
-| 5.0 | 3.0 | Predicted moisture for control |
-| 3.0 | 4.0 | Requested depths, moisture eligibility, and decision records |
+| 5.0 | 3.0 | Predicted moisture for optional model-assisted depth control |
+| 3.0 | 4.0 | Controller observations, target-depth commands, and contionuous decsion log |
 | 3.0 | D3 | Continuous decision log |
 | 4.0 | D3 | Simulated actuator depths and release records |
 | 5.0 | D3 | Predicted moisture and moisture profiles |
@@ -132,19 +185,30 @@ The prediction-enabled control path is:
 
 ```text
 Field data -> Validation -> Selected-path preparation and replay
-                                      |              |
-                                      |              v
-                                      |       Moisture prediction
-                                      |              |
-                                      v              v
-                                    Control decisions
-                                            |
-                                            v
-                            Simulated response and release records
-                                            |
-                                            v
-                                Run results and presentation
+                                      |
+                                      +--> Moisture prediction
+                                      |            |
+                                      v            v
+                        Median filtering and model-assisted
+                                  depth control
+                                      |
+                                      +--> Controller observations
+                                      |    and target-depth commands
+                                      |
+                                      v
+                    Release eligibility, causal observation
+                       selection, and timing compensation
+                                      |
+                                      v
+                    Simulated actuator response and release records
+                                      |
+                                      v
+                          Run results and presentation
 ```
+
+The dashboard replay path and the standalone RxPY release-stream path are separate release-generation implementations. Both use the shared moisture-to-depth and release-eligibility rules, but they do not currently share one unified release-scheduling implementation.
+
+The standalone release-stream implementation accepts complete input arrays and constructs release events before emitting them. It is not an incremental live-sensor processing implementation.
 
 | Measure | Interpretation |
 |---|---|
@@ -156,7 +220,8 @@ Field data -> Validation -> Selected-path preparation and replay
 
 1. The depicted control path uses supplied model predictions and dashboard configurations
 2. Actuator response is assumed and has not been calibrated against physical hydraulic performance.
-3. Command frequency does not specify actuator travel speed, fixed latency, or maximum seed throughput.
+3. Command frequency does not specify actuator travel (hydraulic-depth) speed, fixed latency, or maximum seed throughput.
 4. Complete observation-history alignment, look-ahead scheduling, and physical command delivery remain to be verified.
 5. D3 contains temporary data; durable retention requires export or another explicit persistence mechanism.
 6. Logical data flows do not prove real-time execution guarantees or end-to-end integration of every backend module.
+

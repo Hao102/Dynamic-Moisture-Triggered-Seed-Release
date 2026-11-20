@@ -47,6 +47,9 @@ Both launchers:
 Virtual environments are platform-specific. Do not copy `ICT/.venv` between operating systems; create it locally using the appropriate launcher.
 Keep the terminal open while using the dashboard. Press `Ctrl+C` to stop it.
 
+On first run, the dashboard may take a minute to load and display. After a minute, kindly attempt to reload the webpage. 
+Else, manual setup may be required.
+
 ### macOS and Linux
 
 ```bash
@@ -63,8 +66,8 @@ Double-click `run_windows.bat`, or run:
 
 ### Launcher verification
 
-- macOS: record the result after testing `run_unix.sh`.
-- Linux: not yet verified.
+- macOS: launcher and default dashboard simulation verified.
+- Linux: launcher and default dashboard simulation verified.
 - Windows: not yet verified.
 
 Manual setup instructions are provided below.
@@ -77,7 +80,7 @@ Run all commands from the repository root - the directory containing
 `final_dashboard.py`, `requirements.txt`, and the launchers.
 
 
-### Create or activate the virtual environment
+#### Create or activate the virtual environment
 
 The project’s virtual environment is located at:
 
@@ -92,6 +95,8 @@ For a fresh checkout, create it with:
 ```bash
 python -m venv ICT/.venv
 ```
+
+Depending on your installation, you may need to use `python3` above instead.
 
 Activate it on macOS/Linux:
 
@@ -113,7 +118,7 @@ ICT\.venv\Scripts\activate.bat
 
 Remain at the repository root after activation. Do not change into `ICT/` to run the application.
 
-### Install dependencies
+#### Install dependencies
 
 With the virtual environment activated, run:
 
@@ -127,7 +132,7 @@ For development and testing:
 python -m pip install -r requirements-dev.txt
 ```
 
-### Run the dashboard
+#### Run the dashboard
 
 From the repository root:
 
@@ -182,7 +187,7 @@ prediction_control/simulation.py
 
 `dashboard_bridge.py` preserves the dashboard-facing `run_simulation()` API. It delegates implementation to `simulation.py`.
 
-`RealtimeController()` is independent of Streamlit, dataset loading, model training, and file access. It receives an already-trained model and processes individual moisture observations.
+`RealtimeController()` in `control_loop.py` is independent of Streamlit, dataset loading, model training, and file access. It receives an already-trained model and processes individual moisture observations.
 
 ### Other execution paths
 
@@ -199,7 +204,6 @@ These paths are not interchangeable with the dashboard replay path. In particula
 ### Processing sequence
 
 For each new moisture observation:
-
 1. Validate the observation.
 2. Update a bounded history of valid readings.
 3. Calculate the rolling median once the filter is ready.
@@ -216,11 +220,9 @@ control moisture =
 ```
 
 These are implementation defaults, not calibrated optimal values.
-
 The median filter suppresses isolated spikes but introduces response delay. Sustained moisture changes pass through the filter.
 
 ### Startup and invalid observations
-
 - The first two valid observations are filter warm-up.
 - During warm-up, no new valid depth command is returned.
 - Invalid observations do not produce a valid new depth command.
@@ -241,8 +243,8 @@ higher moisture → smaller depth value
 ```
 
 Values beyond the configured mapping range are clipped for depth calculation.
-
-The configured moisture range also determines release eligibility in the current replay. A physically valid moisture measurement can therefore be outside the planting eligibility range.
+The configured moisture range also determines release eligibility in the current replay. 
+A physically valid moisture measurement can therefore be outside the planting eligibility range.
 
 ## 5. Motion, Release Timing, and Spacing
 
@@ -269,7 +271,7 @@ The depth actuator time constant and seed-release delay are separate parameters:
 
 ### Spacing metrics
 
-Target seed spacing is configurable between 0.015 and 0.030 m. The individual-gap tolerance target is ±0.001 m.
+Target seed spacing is configurable between 0.015 and 0.060 m. The individual-gap tolerance target is ±0.001 m.
 
 Diagnostics calculate:
 
@@ -322,8 +324,6 @@ The client format is a spatial moisture grid:
 
 This raw format is not directly accepted by the current dashboard uploader.
 
-It also lacks the independent target and depth fields required by the existing model-training setup. Do not fabricate reference labels simply to satisfy the internal schema.
-
 A future importer should normalise this format and report missing metadata and unexpected cells explicitly.
 
 ### Model implementation
@@ -335,7 +335,8 @@ A future importer should normalise this format and report missing metadata and u
 - Two Gaussian-process experts.
 - Probability-weighted expert predictions.
 
-The current inference API returns predicted moisture, dominant expert, and expert weights. Expert weights are not prediction uncertainty intervals.
+The current inference API returns predicted moisture, dominant expert, and expert weights. 
+Expert weights are not prediction uncertainty intervals.
 
 To run the existing training script:
 
@@ -355,25 +356,21 @@ The dashboard provides:
 - Release log.
 - Controller diagnostics.
 
-Controller diagnostics include measured, filtered, predicted, and control moisture; valid-command counts; model-assistance usage; replay gap metrics; and a downloadable control log.
-
-Interpretation notes:
-
-- “Model-assisted valid samples” measures model usage, not prediction accuracy.
-- “Depth error ≤ 1 mm” refers to depth tracking, not seed spacing.
-- Depth tracking error differs from error against a model-derived “best” planting depth.
-- Model-derived field visualisations are not independent ground-truth measurements.
-- Downloads should be retained with the run settings and model identity for reproducibility.
-
 ## 8. Repository Guide
 
 ```text
 .
-├── final_dashboard.py          # Streamlit interface
+├── final_dashboard.py          # Streamlit interface - main Dashboard code
 ├── interface.py                # Existing public compatibility API
 ├── main.py                     # Existing batch entry point
+├── run_unix.sh                 # macOS/Linux setup and dashboard launcher
+├── run_windows.bat             # Windows setup and dashboard launcher
+├── ICT/
+│   └── .venv/                  # Local Python environment; not committed
+│
 ├── requirements.txt
 ├── requirements-dev.txt
+│
 ├── prediction_control/
 │   ├── __init__.py
 │   ├── sensor.py               # Stateful moisture filtering
@@ -388,23 +385,20 @@ Interpretation notes:
 │   ├── dataset_pipeline.py     # Internal dataset and batch workflow
 │   ├── hao_model_runtime.py    # Model training/inference implementation
 │   └── validation.py           # Batch input/configuration validation
+│
 ├── data/
 │   ├── raw/                    # Original client data
-│   ├── integration/            # Current internal demonstration datasets
-│   ├── processed/
-│   └── test/
+│   └── integration/            # Current internal-use datasets (including default)
+│   
 ├── models/                     # Saved model artefacts
 ├── outputs/                    # Generated batch outputs
 ├── scripts/                    # Training/data-preparation utilities
 ├── tests/                      # Automated tests
 ├── docs/                       # Contracts and architecture documentation
 ├── Jupyter Notebooks/          # Modelling experiments
-└── graphify-out/                # Generated repository analysis
 ```
 
-Generated caches and graph artefacts are not operational controller components.
-
-The replay uses vectorised causal index lookup for releases. The separately tested helper in `release_timing.py` documents the same availability rule.
+Generated caches and other artefacts are not operational controller components.
 
 ## 9. Testing
 
@@ -414,19 +408,9 @@ Run the complete suite:
 python -m pytest -q
 ```
 
-Useful focused suites:
-
-```bash
-python -m pytest tests/test_sensor.py tests/test_control_loop.py -q
-python -m pytest tests/test_spacing.py tests/test_release_timing.py -q
-python -m pytest tests/test_simulation.py tests/test_dashboard_bridge.py -q
-```
-
 Tests cover filtering, depth direction, model assistance, startup, invalid observations, spacing calculations, causal sample selection, replay integration, legacy release compensation, and validation.
 
 Passing tests do not establish physical accuracy, robustness to every noise distribution, or real-time deadline compliance.
-
-Record the final test result against the submitted commit rather than relying on a historical test count.
 
 ## 10. Existing Utilities
 
@@ -448,9 +432,9 @@ The preparation utility is associated with:
 data/integration/winter_wheat_dashboard_input.xlsx
 ```
 
-That workbook is not the current CSV dashboard-upload contract.
+That workbook is not the current CSV dashboard-upload contract. It is used to generate the semi-synthetic dataset that is used by default.
 
-The batch entry point and utility scripts are separate from the updated dashboard replay. Verify their behaviour before relying on them as part of a client workflow.
+The batch entry point and utility scripts are separate from the updated dashboard replay. 
 
 ## 11. Further Engineering and Validation
 
@@ -470,9 +454,12 @@ The present replay should not be connected directly to physical machinery withou
 
 ## 12. Further Documentation
 
-- [Controller contract](docs/controller-contract.md)
-- [Data-flow diagram](docs/Data-Flow%20Diagram.md)
-- [Documentation index](docs/docs.md)
-- [Data notes](data/data.md)
+## Further Documentation
 
-Some supporting documents may describe earlier execution paths. Cross-check them against the current source and this handover status until they have been updated.
+- [Documentation index](docs/docs.md)
+- [Handover notes](docs/handover.md)
+- [Controller contract](docs/controller-contract.md)
+- [Dataset guide](docs/dataset-guide.md)
+- [Data-Flow Diagram](docs/Data-Flow%20Diagram.md)
+
+Some supporting documents may describe earlier execution paths.
