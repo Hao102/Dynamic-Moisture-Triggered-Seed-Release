@@ -59,23 +59,14 @@ def validate_inputs(field_positions, field_moisture, speed_time, speed_values, c
         raise ValueError("field_positions and field_moisture must have the same length")
     if len(speed_time) != len(speed_values):
         raise ValueError("speed_time and speed_values must have the same length")
-
     _validate_numeric_values(field_positions, "field_positions")
     _validate_numeric_values(field_moisture, "field_moisture")
     _validate_numeric_values(speed_time, "speed_time")
     _validate_numeric_values(speed_values, "speed_values")
-
-    if any(position < 0 for position in field_positions):
-        raise ValueError("field_positions cannot contain negative positions")
-    if any(field_positions[i] <= field_positions[i - 1] for i in range(1, len(field_positions))):
-        raise ValueError("field_positions must be strictly increasing")
-    if any(moisture < 0 or moisture > 100 for moisture in field_moisture):
-        raise ValueError("field_moisture must be between 0 and 100")
-    if any(timestamp < 0 for timestamp in speed_time):
-        raise ValueError("speed_time cannot contain negative timestamps")
+    if any(field_positions[i] < field_positions[i - 1] for i in range(1, len(field_positions))):
+        raise ValueError("field_positions must be sorted in ascending order")
     if any(speed_time[i] <= speed_time[i - 1] for i in range(1, len(speed_time))):
         raise ValueError("speed_time must be strictly increasing")
     if any(speed < 0 for speed in speed_values):
         raise ValueError("speed_values cannot contain negative speeds")
-
     _validate_config(config)
