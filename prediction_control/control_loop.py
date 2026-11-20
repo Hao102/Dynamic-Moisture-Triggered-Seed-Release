@@ -61,6 +61,9 @@ class RealtimeController:
             "measured_moisture_pct": reading.raw_moisture_pct,
             "filtered_moisture_pct": reading.filtered_moisture_pct,
             "predicted_moisture_pct": None,
+            "dominant_expert": -1,
+            "expert_0_weight": float("nan"),
+            "expert_1_weight": float("nan"),
             "control_moisture_pct": None,
             "target_depth_mm": None,
             "command_valid": False,
@@ -86,6 +89,15 @@ class RealtimeController:
 
             if isfinite(predicted) and 0.0 <= predicted <= 100.0:
                 result["predicted_moisture_pct"] = predicted
+                result["dominant_expert"] = int(
+                    getattr(prediction, "dominant_expert", -1)
+                )
+                expert_weights = getattr(
+                    prediction, "expert_weights", (float("nan"), float("nan"))
+                )
+                result["expert_0_weight"] = float(expert_weights[0])
+                result["expert_1_weight"] = float(expert_weights[1])
+
                 control = (
                     (1.0 - self.model_weight) * filtered
                     + self.model_weight * predicted
